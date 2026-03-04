@@ -326,17 +326,10 @@ Son not: [ONAYLANMIS] isaretli orneklerin tarzini oncelikli taklit et. Sadece ce
     }
   };
 
-  const copyToClipboard = async () => {
+    const copyToClipboard = async () => {
     navigator.clipboard.writeText(cevap);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-    try {
-      await supabase.from('onaylanan_cevaplar').insert({
-        soru, urun_adi: urunAdi || null,
-        yanlis_cevap: null, dogru_cevap: cevap, duzeltme_notu: 'Direkt onaylandi'
-      });
-      loadDbStats();
-    } catch (e) { /* sessizce gec */ }
   };
 
   const handleKeyPress = (e) => {
