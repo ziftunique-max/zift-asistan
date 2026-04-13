@@ -39,24 +39,10 @@ function App() {
     const savedKey = localStorage.getItem('zift_api_key');
     if (savedKey) { setApiKey(savedKey); setTempApiKey(savedKey); }
 
-    try {
-      const savedEslestirme = localStorage.getItem('zift_eslestirme');
-      if (savedEslestirme) {
-        const parsed = JSON.parse(savedEslestirme);
-        if (Array.isArray(parsed) && parsed.length > 0) setEslestirme(parsed);
-        else throw new Error('invalid');
-      } else {
-        setEslestirme(VARSAYILAN_ESLESTIRME);
-        localStorage.setItem('zift_eslestirme', JSON.stringify(VARSAYILAN_ESLESTIRME));
-      }
-    } catch {
-      setEslestirme(VARSAYILAN_ESLESTIRME);
-      localStorage.setItem('zift_eslestirme', JSON.stringify(VARSAYILAN_ESLESTIRME));
-    }
-
     loadDbStats();
     loadKurallar();
     loadUrunBilgileri();
+    loadEslestirme();
   }, []);
 
   useEffect(() => {
@@ -95,6 +81,23 @@ function App() {
     const { data, error } = await supabase.from('urun_bilgileri').select('id, urun_adi, bilgi_turu, bilgi');
     if (error) { console.error('Ürün bilgileri yüklenemedi:', error.message); return; }
     setUrunBilgileri(data || []);
+  };
+
+  const loadEslestirme = async () => {
+    try {
+      const { data, error } = await supabase.from('eslestirme').select('id, barkod, isim, model_kodu').order('isim');
+      if (error) throw error;
+      if (data && data.length > 0) {
+        setEslestirme(data);
+      } else {
+        const { error: seedError } = await supabase.from('eslestirme').insert(VARSAYILAN_ESLESTIRME);
+        if (seedError) { console.error('Eslestirme seed hatası:', seedError.message); setEslestirme(VARSAYILAN_ESLESTIRME); return; }
+        const { data: seeded } = await supabase.from('eslestirme').select('id, barkod, isim, model_kodu').order('isim');
+        setEslestirme(seeded || VARSAYILAN_ESLESTIRME);
+      }
+    } catch {
+      setEslestirme(VARSAYILAN_ESLESTIRME);
+    }
   };
 
   /* ─── API KEY ─── */
@@ -143,7 +146,6 @@ function App() {
     // Önce onaylanan cevaplardan ara (en güvenilir kaynak)
     for (const keyword of keywords.slice(0, 3)) {
       let q = supabase.from('onaylanan_cevaplar').select('soru, dogru_cevap, urun_adi').ilike('soru', `%${keyword}%`).limit(5);
-      if (modelKodlari.length > 0) q = q.in('model_kodu', modelKodlari);
       const { data, error } = await q;
       if (error) continue;
       if (data) results = [...results, ...data.map(d => ({ soru: d.soru, cevap: d.dogru_cevap, urun_adi: d.urun_adi, kaynak: 'onaylanan' }))];
@@ -273,7 +275,6 @@ Son not: Sadece cevabi yaz. Aciklama, yorum, not ekleme. Yapay zeka oldugundan b
     if (cevap.startsWith('Hata:')) return;
 
     try {
-      const modelKodlari = secilenModelKodlari();
       const soruTrimmed = soru.trim();
 
       // Duplicate kontrolü
@@ -295,7 +296,6 @@ Son not: Sadece cevabi yaz. Aciklama, yorum, not ekleme. Yapay zeka oldugundan b
         const { error } = await supabase.from('onaylanan_cevaplar').insert({
           soru: soruTrimmed,
           urun_adi: seciliUrun ? seciliUrun.isim : null,
-          model_kodu: modelKodlari.join(', ') || null,
           yanlis_cevap: null,
           dogru_cevap: cevap,
           duzeltme_notu: 'Doğrudan onaylandı'
@@ -316,13 +316,23 @@ Son not: Sadece cevabi yaz. Aciklama, yorum, not ekleme. Yapay zeka oldugundan b
     if (!duzeltmeNotu.trim()) return;
     setDuzeltmeLoading(true);
     try {
+      const modelKodlari = secilenModelKodlari();
+      const urunBilgi = getUrunBilgileri(modelKodlari);
+      let urunText = '';
+      if (urunBilgi.length > 0) {
+        urunText = '\n\nURUN BILGILERI:\n';
+        urunBilgi.forEach(u => { urunText += `- ${u.urun_adi} (${u.bilgi_turu}): ${u.bilgi}\n`; });
+      }
+
       const text = await callAnthropic({
         apiKey,
-        system: `Sen Zift Unique musteri hizmetleri asistanisin. Duzeltme notuna gore yeni bir cevap uret. Duzeltme notu bozuk Turkce ile yazilmis olabilir, sen duzgun Turkce ile cevap yaz. Her zaman "Merhabalar" ile basla, sadece 1 kere "efendim" kullan. Sadece cevabi yaz, aciklama ekleme.
+        system: `${TEMEL_BILGI}
 
 AKTIF KURALLAR:
-${kurallar.map((k, i) => `${i + 1}. ${k.kural}`).join('\n')}`,
-        userMessage: `Musteri Sorusu: ${soru}\n\nYanlis Cevap: ${cevap}\n\nDuzeltme Notu: ${duzeltmeNotu}\n\nBu duzeltme notuna gore yeni dogru cevabi yaz.`
+${kurallar.map((k, i) => `${i + 1}. ${k.kural}`).join('\n')}${urunText}
+
+GOREV: Duzeltme notuna gore yeni bir cevap uret. Duzeltme notu bozuk Turkce ile yazilmis olabilir, sen duzgun Turkce ile cevap yaz. Her zaman "Merhabalar" ile basla, sadece 1 kere "efendim" kullan. Sadece cevabi yaz, aciklama ekleme.`,
+        userMessage: `${seciliUrun ? `Urun: ${seciliUrun.isim} (${modelKodlari.join(', ')})\n` : ''}Musteri Sorusu: ${soru}\n\nYanlis Cevap: ${cevap}\n\nDuzeltme Notu: ${duzeltmeNotu}\n\nBu duzeltme notuna gore yeni dogru cevabi yaz.`
       });
       setDuzeltilmisCevap(text);
     } catch (error) {
@@ -334,7 +344,6 @@ ${kurallar.map((k, i) => `${i + 1}. ${k.kural}`).join('\n')}`,
 
   const handleOnayla = async () => {
     try {
-      const modelKodlari = secilenModelKodlari();
       const soruTrimmed = soru.trim();
 
       // Duplicate kontrolü
@@ -347,7 +356,6 @@ ${kurallar.map((k, i) => `${i + 1}. ${k.kural}`).join('\n')}`,
       if (existing && existing.length > 0) {
         const { error } = await supabase.from('onaylanan_cevaplar').update({
           urun_adi: seciliUrun ? seciliUrun.isim : null,
-          model_kodu: modelKodlari.join(', ') || null,
           yanlis_cevap: cevap,
           dogru_cevap: duzeltilmisCevap,
           duzeltme_notu: duzeltmeNotu
@@ -357,7 +365,6 @@ ${kurallar.map((k, i) => `${i + 1}. ${k.kural}`).join('\n')}`,
         const { error } = await supabase.from('onaylanan_cevaplar').insert({
           soru: soruTrimmed,
           urun_adi: seciliUrun ? seciliUrun.isim : null,
-          model_kodu: modelKodlari.join(', ') || null,
           yanlis_cevap: cevap,
           dogru_cevap: duzeltilmisCevap,
           duzeltme_notu: duzeltmeNotu
@@ -384,10 +391,6 @@ ${kurallar.map((k, i) => `${i + 1}. ${k.kural}`).join('\n')}`,
 
   const usePreviousAnswer = (item) => { setCevap(item.cevap); setShowBenzerler(false); };
 
-  const eslestirmeKaydet = (yeniListe) => {
-    setEslestirme(yeniListe);
-    localStorage.setItem('zift_eslestirme', JSON.stringify(yeniListe));
-  };
 
   /* ─── RENDER ─── */
   return (
@@ -460,14 +463,17 @@ ${kurallar.map((k, i) => `${i + 1}. ${k.kural}`).join('\n')}`,
                     className={`px-4 py-2.5 cursor-pointer text-sm border-b border-slate-700 transition-colors ${!seciliUrun ? 'text-blue-400 bg-blue-500/10' : 'text-slate-400 hover:bg-slate-700'}`}>
                     🌐 Genel
                   </div>
-                  {filtreliListe().map((item) => (
-                    <div key={item.barkod} onClick={() => { setSeciliUrun(item); setDropdownAcik(false); setAramaMetni(''); }}
-                      className={`px-4 py-2.5 cursor-pointer text-sm flex justify-between items-center transition-colors hover:bg-slate-700 ${seciliUrun && dropdownLabel(seciliUrun) === dropdownLabel(item) ? 'bg-blue-500/10 text-blue-400' : 'text-slate-200'}`}>
-                      <span className="font-medium">{dropdownLabel(item)}</span>
-                      {format !== 'modelkodu' && <span className="text-slate-500 text-xs ml-4 truncate">{item.model_kodu}</span>}
-                    </div>
-                  ))}
-                  {filtreliListe().length === 0 && <div className="px-4 py-3 text-slate-500 text-sm text-center">Sonuç bulunamadı</div>}
+                  {(() => {
+                    const liste = filtreliListe();
+                    if (liste.length === 0) return <div className="px-4 py-3 text-slate-500 text-sm text-center">Sonuç bulunamadı</div>;
+                    return liste.map((item) => (
+                      <div key={item.barkod} onClick={() => { setSeciliUrun(item); setDropdownAcik(false); setAramaMetni(''); }}
+                        className={`px-4 py-2.5 cursor-pointer text-sm flex justify-between items-center transition-colors hover:bg-slate-700 ${seciliUrun && dropdownLabel(seciliUrun) === dropdownLabel(item) ? 'bg-blue-500/10 text-blue-400' : 'text-slate-200'}`}>
+                        <span className="font-medium">{dropdownLabel(item)}</span>
+                        {format !== 'modelkodu' && <span className="text-slate-500 text-xs ml-4 truncate">{item.model_kodu}</span>}
+                      </div>
+                    ));
+                  })()}
                 </div>
               </div>
             )}
@@ -614,7 +620,7 @@ ${kurallar.map((k, i) => `${i + 1}. ${k.kural}`).join('\n')}`,
           urunBilgileri={urunBilgileri}
           loadUrunBilgileri={loadUrunBilgileri}
           eslestirme={eslestirme}
-          eslestirmeKaydet={eslestirmeKaydet}
+          loadEslestirme={loadEslestirme}
           dbStats={dbStats}
           loadDbStats={loadDbStats}
         />

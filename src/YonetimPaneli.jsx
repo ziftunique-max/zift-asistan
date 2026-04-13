@@ -9,7 +9,7 @@ const TABS = [
   { id: 'temizlik', label: '🧹 Temizlik & İstatistik' },
 ];
 
-export default function YonetimPaneli({ onClose, kurallar, loadKurallar, urunBilgileri, loadUrunBilgileri, eslestirme, eslestirmeKaydet, dbStats, loadDbStats }) {
+export default function YonetimPaneli({ onClose, kurallar, loadKurallar, urunBilgileri, loadUrunBilgileri, eslestirme, loadEslestirme, dbStats, loadDbStats }) {
   const [tab, setTab] = useState('kurallar');
 
   return (
@@ -32,7 +32,7 @@ export default function YonetimPaneli({ onClose, kurallar, loadKurallar, urunBil
         <div className="flex-1 overflow-y-auto p-4">
           {tab === 'kurallar' && <KurallarTab kurallar={kurallar} loadKurallar={loadKurallar} />}
           {tab === 'urunbilgi' && <UrunBilgiTab urunBilgileri={urunBilgileri} loadUrunBilgileri={loadUrunBilgileri} />}
-          {tab === 'eslestirme' && <EslestirmeTab eslestirme={eslestirme} eslestirmeKaydet={eslestirmeKaydet} />}
+          {tab === 'eslestirme' && <EslestirmeTab eslestirme={eslestirme} loadEslestirme={loadEslestirme} />}
           {tab === 'temizlik' && <TemizlikTab dbStats={dbStats} loadDbStats={loadDbStats} />}
         </div>
       </div>
@@ -67,13 +67,15 @@ function KurallarTab({ kurallar, loadKurallar }) {
   };
 
   const kuralToggle = async (id, aktif) => {
-    await supabase.from('kurallar').update({ aktif: !aktif }).eq('id', id);
+    const { error } = await supabase.from('kurallar').update({ aktif: !aktif }).eq('id', id);
+    if (error) { alert('Güncelleme hatası: ' + error.message); return; }
     await loadKurallar();
   };
 
   const kuralSil = async (id) => {
     if (!confirm('Bu kuralı silmek istediğinize emin misiniz?')) return;
-    await supabase.from('kurallar').delete().eq('id', id);
+    const { error } = await supabase.from('kurallar').delete().eq('id', id);
+    if (error) { alert('Silme hatası: ' + error.message); return; }
     await loadKurallar();
   };
 
@@ -211,20 +213,56 @@ function UrunBilgiTab({ urunBilgileri, loadUrunBilgileri }) {
 }
 
 /* ─── EŞLEŞTİRME TAB ─── */
-function EslestirmeTab({ eslestirme, eslestirmeKaydet }) {
+function EslestirmeTab({ eslestirme, loadEslestirme }) {
   const [yeniUrun, setYeniUrun] = useState({ barkod: '', isim: '', model_kodu: '' });
-  const [duzenleIndex, setDuzenleIndex] = useState(null);
+  const [duzenleId, setDuzenleId] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  const urunEkle = () => {
+  const urunEkle = async () => {
     if (!yeniUrun.barkod || !yeniUrun.isim || !yeniUrun.model_kodu) return;
-    if (duzenleIndex !== null) {
-      const liste = [...eslestirme]; liste[duzenleIndex] = yeniUrun;
-      eslestirmeKaydet(liste); setDuzenleIndex(null);
-    } else { eslestirmeKaydet([...eslestirme, yeniUrun]); }
+    setSaving(true);
+    if (duzenleId) {
+      const { error } = await supabase.from('eslestirme').update({
+        barkod: yeniUrun.barkod, isim: yeniUrun.isim, model_kodu: yeniUrun.model_kodu
+      }).eq('id', duzenleId);
+      if (error) { alert('Güncelleme hatası: ' + error.message); setSaving(false); return; }
+      setDuzenleId(null);
+    } else {
+      const { error } = await supabase.from('eslestirme').insert({
+        barkod: yeniUrun.barkod, isim: yeniUrun.isim, model_kodu: yeniUrun.model_kodu
+      });
+      if (error) {
+        if (error.message.includes('duplicate') || error.message.includes('unique')) alert('Bu barkod zaten mevcut!');
+        else alert('Ekleme hatası: ' + error.message);
+        setSaving(false); return;
+      }
+    }
     setYeniUrun({ barkod: '', isim: '', model_kodu: '' });
+    await loadEslestirme();
+    setSaving(false);
   };
-  const urunSil = (i) => eslestirmeKaydet(eslestirme.filter((_, idx) => idx !== i));
-  const urunDuzenle = (i) => { setYeniUrun({ ...eslestirme[i] }); setDuzenleIndex(i); };
+
+  const urunSil = async (id) => {
+    if (!confirm('Bu ürünü silmek istediğinize emin misiniz?')) return;
+    const { error } = await supabase.from('eslestirme').delete().eq('id', id);
+    if (error) { alert('Silme hatası: ' + error.message); return; }
+    await loadEslestirme();
+  };
+
+  const urunDuzenle = (item) => {
+    setYeniUrun({ barkod: item.barkod, isim: item.isim, model_kodu: item.model_kodu });
+    setDuzenleId(item.id);
+  };
+
+  const sifirla = async () => {
+    if (!confirm('Tüm eşleştirmeler silinip varsayılan liste yüklenecek. Emin misiniz?')) return;
+    setSaving(true);
+    await supabase.from('eslestirme').delete().neq('id', 0);
+    const { error } = await supabase.from('eslestirme').insert(VARSAYILAN_ESLESTIRME);
+    if (error) alert('Sıfırlama hatası: ' + error.message);
+    await loadEslestirme();
+    setSaving(false);
+  };
 
   return (
     <div>
@@ -237,24 +275,25 @@ function EslestirmeTab({ eslestirme, eslestirmeKaydet }) {
           </div>
         ))}
         <div className="col-span-3 flex gap-2">
-          <button onClick={urunEkle} disabled={!yeniUrun.barkod || !yeniUrun.isim || !yeniUrun.model_kodu}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium text-white ${duzenleIndex !== null ? 'bg-orange-600 hover:bg-orange-500' : 'bg-green-600 hover:bg-green-500'} disabled:bg-slate-600 disabled:cursor-not-allowed`}>
-            {duzenleIndex !== null ? '✏️ Güncelle' : '+ Ekle'}
+          <button onClick={urunEkle} disabled={saving || !yeniUrun.barkod || !yeniUrun.isim || !yeniUrun.model_kodu}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium text-white ${duzenleId ? 'bg-orange-600 hover:bg-orange-500' : 'bg-green-600 hover:bg-green-500'} disabled:bg-slate-600 disabled:cursor-not-allowed`}>
+            {saving ? '...' : duzenleId ? '✏️ Güncelle' : '+ Ekle'}
           </button>
-          <button onClick={() => eslestirmeKaydet(VARSAYILAN_ESLESTIRME)} className="px-3 py-2 text-xs text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/10">Sıfırla</button>
+          {duzenleId && <button onClick={() => { setDuzenleId(null); setYeniUrun({ barkod: '', isim: '', model_kodu: '' }); }} className="px-3 py-2 text-xs text-slate-400 bg-slate-700 rounded-lg">İptal</button>}
+          <button onClick={sifirla} disabled={saving} className="px-3 py-2 text-xs text-red-400 border border-red-500/30 rounded-lg hover:bg-red-500/10 disabled:opacity-50">Sıfırla</button>
         </div>
       </div>
 
-      <p className="text-xs text-slate-500 mb-2">{eslestirme.length} kayıt</p>
+      <p className="text-xs text-slate-500 mb-2">{eslestirme.length} kayıt (tüm çalışanlarla paylaşılır)</p>
       <div className="max-h-72 overflow-y-auto space-y-1">
         {eslestirme.map((item, i) => (
-          <div key={item.barkod} className={`grid grid-cols-4 gap-2 px-3 py-2 rounded-lg text-sm items-center ${duzenleIndex === i ? 'bg-orange-500/10' : i % 2 === 0 ? 'bg-slate-900/30' : ''}`}>
+          <div key={item.id || item.barkod} className={`grid grid-cols-4 gap-2 px-3 py-2 rounded-lg text-sm items-center ${duzenleId === item.id ? 'bg-orange-500/10' : i % 2 === 0 ? 'bg-slate-900/30' : ''}`}>
             <span className="text-white font-medium truncate">{item.isim}</span>
             <span className="text-slate-400 truncate text-xs">{item.barkod}</span>
             <span className="text-slate-500 truncate text-xs">{item.model_kodu}</span>
             <div className="flex gap-1 justify-end">
-              <button onClick={() => urunDuzenle(i)} className="text-yellow-400 hover:text-yellow-300 p-1">✏️</button>
-              <button onClick={() => urunSil(i)} className="text-red-400 hover:text-red-300 p-1">🗑️</button>
+              <button onClick={() => urunDuzenle(item)} className="text-yellow-400 hover:text-yellow-300 p-1">✏️</button>
+              <button onClick={() => urunSil(item.id)} className="text-red-400 hover:text-red-300 p-1">🗑️</button>
             </div>
           </div>
         ))}
