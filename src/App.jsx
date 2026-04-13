@@ -415,7 +415,7 @@ function App() {
           'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 1000,
           system: `${TEMEL_BILGI}\n\n## DAVRANIM KURALLARI (Supabase'den canli):\n${kurallarText}${urunKapsam}${urunText}${examplesText}\n\nSon not: [ONAYLANMIS] isaretli orneklerin tarzini oncelikli taklit et. Sadece cevabi yaz, aciklama ekleme. Asla yapay zeka oldugunden bahsetme.`,
           messages: [{
@@ -448,7 +448,7 @@ function App() {
           'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 1000,
           system: 'Sen Zift Unique musteri hizmetleri asistanisin. Duzeltme notuna gore yeni bir cevap uret. Duzeltme notu bozuk Turkce ile yazilmis olabilir, sen duzgun Turkce ile cevap yaz. Her zaman "Merhabalar" ile basla, sadece 1 kere "efendim" kullan. Sadece cevabi yaz, aciklama ekleme.',
           messages: [{
